@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<PermissionSet xmlns="http://soap.sforce.com/2006/04/metadata">
+    <description>Includes this user's calendar Events in Event Account Matching (the Events With Potential Account Matches list view) even though they are not on the Attorney profile. Users on the Attorney profile are included automatically and do not need this.</description>
+    <hasActivationRequired>false</hasActivationRequired>
+    <label>Event Account Matching</label>
+</PermissionSet>
