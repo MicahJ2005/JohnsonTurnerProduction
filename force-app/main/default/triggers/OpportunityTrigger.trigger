@@ -16,6 +16,7 @@ trigger OpportunityTrigger on Opportunity (after insert, after update) {
 
     if(Trigger.isInsert) {
         OpportunityTriggerHandler.createDefaultRoles(newOpps);
+        CommunicationBacklinkService.handleOpportunityAfterInsert(newOpps);
     } else {
         OpportunityTriggerHandler.createProjectOnClosedWonOpportunity(newOpps, oldOppsMap);
         OpportunityTriggerHandler.updateCESRoleIfOwnerChanges(newOpps, oldOppsMap);
