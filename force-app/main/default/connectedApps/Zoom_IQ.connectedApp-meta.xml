@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ConnectedApp xmlns="http://soap.sforce.com/2006/04/metadata">
+    <contactEmail>tim@johnsonturner.com</contactEmail>
+    <label>Zoom IQ</label>
+    <oauthConfig>
+        <callbackUrl>https://login.salesforce.com</callbackUrl>
+        <certificate>MIIDdDCCAlwCCQDNLfItphJwuzANBgkqhkiG9w0BAQsFADB8MQswCQYDVQQGEwJVUzESMBAGA1UECAwJTWlubmVzb3RhMRQwEgYDVQQHDAtGb3Jlc3QgTGFrZTEdMBsGA1UECgwUSm9obnNvbiBUdXJuZXIgTGVnYWwxJDAiBgkqhkiG9w0BCQEWFXRpbUBqb2huc29udHVybmVyLmNvbTAeFw0yMzA0MTkxNTUwMTZaFw0yNDA0MTgxNTUwMTZaMHwxCzAJBgNVBAYTAlVTMRIwEAYDVQQIDAlNaW5uZXNvdGExFDASBgNVBAcMC0ZvcmVzdCBMYWtlMR0wGwYDVQQKDBRKb2huc29uIFR1cm5lciBMZWdhbDEkMCIGCSqGSIb3DQEJARYVdGltQGpvaG5zb250dXJuZXIuY29tMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA3XqRl3RCeM2TWs7z2LaZjxWTicZUhC9nIMZMHt4Rb+Wv8hrvlvcEpMGE+MlejnVGyqMudDDFLaCRpOkkqd/YUgnijLgrHjEgJbfp0h1/a5v1YKRBT9wkmGHNrdrNm6VMFjo4tApxH7Xnt/AClstqZAmASStKmN+h0fqftXJXhj8i40ZoHCxqKHU1lBDGRS41vKBIGQ99LF9lEIPkhuYN4qMFElXqupSoj6cRgmhsEkay0ybVDvkgEkTJ0NQIeG/Slw1XNEYXZLDpRgEAMUTYo40NI20pPuxz9NEmxahYK+94QsGfJBRXXZCaUZaxS8pCf4tz5s0x5y9K7Xm9vS3YBQIDAQABMA0GCSqGSIb3DQEBCwUAA4IBAQCF5LO9nznaGv5RxSrB91DI9DuaGIOThaMcPqXA9peJUWzcijSPT6UuVki7IFqrfaVM2zYAmX3BR5qVo1uEaz36uknCciU+GNtHt0myHsk4eUE9wSIpIIXkELFAR3Lmfr6W0n9jWiEE4jsxkEgwSv9wsUi/vvggOx061MuMjcCrJvZvHIxS/OVuuVe0wX1+VfShgWVVTC9fL7ocQRMG2qLWIZR047M1hGvJ0lYrZIIj9uAGAhKnwPqQxrUsK4ThjQh3tvIADBwPVUYwmbRJA50QQJsZB+29Jg/I7ZNk7mjqBVOeaZjaFvpykemML/ITffIYYRhNUNH1SxkJr06wB5zB</certificate>
+        <consumerKey>3MVG95jctIhbyCppoW3SZ3zMU7Hw2Wf6d3vJ2f1zcOl9J5RXtsnpT3o1ENbdtpdHmuJTK50NQXxWCvRpRVQcr</consumerKey>
+        <isAdminApproved>true</isAdminApproved>
+        <isClientCredentialEnabled>false</isClientCredentialEnabled>
+        <isCodeCredentialEnabled>false</isCodeCredentialEnabled>
+        <isCodeCredentialPostOnly>false</isCodeCredentialPostOnly>
+        <isConsumerSecretOptional>false</isConsumerSecretOptional>
+        <isIntrospectAllTokens>false</isIntrospectAllTokens>
+        <isNamedUserJwtEnabled>false</isNamedUserJwtEnabled>
+        <isPkceRequired>false</isPkceRequired>
+        <isRefreshTokenRotationEnabled>false</isRefreshTokenRotationEnabled>
+        <isSecretRequiredForRefreshToken>true</isSecretRequiredForRefreshToken>
+        <isSecretRequiredForTokenExchange>false</isSecretRequiredForTokenExchange>
+        <isTokenExchangeEnabled>false</isTokenExchangeEnabled>
+        <scopes>Web</scopes>
+        <scopes>Full</scopes>
+        <scopes>RefreshToken</scopes>
+        <scopes>OpenID</scopes>
+    </oauthConfig>
+    <oauthPolicy>
+        <ipRelaxation>ENFORCE</ipRelaxation>
+        <isTokenExchangeFlowEnabled>false</isTokenExchangeFlowEnabled>
+        <refreshTokenPolicy>infinite</refreshTokenPolicy>
+    </oauthPolicy>
+    <profileName>System Administrator</profileName>
+</ConnectedApp>

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomLabels xmlns="http://soap.sforce.com/2006/04/metadata">
+    <labels>
+        <fullName>System_Health_Slack_Channel_Id</fullName>
+        <categories>Slack</categories>
+        <language>en_US</language>
+        <protected>true</protected>
+        <shortDescription>System health Slack channel ID</shortDescription>
+        <value>C0C8JCTFNS0</value>
+    </labels>
+</CustomLabels>

@@ -1,0 +1,99 @@
+<template>
+    <lightning-card title="Relate Person Account or Lead to Event" icon-name="standard:event">
+        <div class="slds-p-around_medium">
+            <template if:true={isSaveSuccessful}>
+                <div class="slds-notify slds-notify_alert slds-alert_success" role="alert">
+                    <span class="slds-assistive-text">Success</span>
+                    <lightning-icon icon-name="utility:success" size="x-small" class="slds-m-right_x-small"></lightning-icon>
+                    <span>Save successful. Please refresh the page to see the updated related record on the Event.</span>
+                </div>
+            </template>
+
+            <!-- If WhatId is missing, show match selector -->
+            <template if:true={accountOptions.length}>
+                <p class="slds-m-bottom_small">Select a potential match retrieved by Agentforce:</p>
+
+                <template for:each={accountOptions} for:item="option">
+                    <div
+                        key={option.value}
+                        class={option.cardClass}
+                        data-id={option.value}
+                        onclick={handleCardClick}
+                        role="radio"
+                        aria-checked={option.isSelected}
+                        tabindex="0">
+                        <div class="slds-media slds-media_center">
+                            <div class="slds-media__figure">
+                                <lightning-input
+                                    type="radio"
+                                    name="accountMatches"
+                                    data-id={option.value}
+                                    checked={option.isSelected}
+                                    onchange={handleCardClick}
+                                    variant="label-hidden"
+                                    label={option.name}>
+                                </lightning-input>
+                            </div>
+                            <div class="slds-media__body">
+                                <div class="slds-grid slds-wrap slds-grid_vertical-align-center">
+                                    <p class="slds-text-heading_small slds-m-right_small">{option.name}</p>
+                                    <span class="slds-badge slds-m-right_x-small">{option.recordTypeLabel}</span>
+                                    <template if:true={option.isTopMatchCandidate}>
+                                        <span class="slds-badge slds-theme_success top-match-badge">
+                                            <lightning-icon icon-name="utility:check" size="xx-small" variant="inverse" class="slds-m-right_xx-small"></lightning-icon>
+                                            Top Match Candidate
+                                        </span>
+                                    </template>
+                                </div>
+                                <p class="slds-text-body_small slds-text-color_weak">{option.email}</p>
+
+                                <template if:true={option.hasActiveMatterMatches}>
+                                    <div class="slds-m-top_x-small">
+                                        <p class="slds-text-title_caps slds-text-color_weak">Active Matters</p>
+                                        <template for:each={option.activeMatterMatches} for:item="matter">
+                                            <div key={matter.matterId} class="slds-text-body_small">
+                                                <lightning-icon icon-name="utility:link" size="xx-small" class="slds-m-right_xx-small"></lightning-icon>
+                                                <a href={matter.matterUrl} target="_blank" title={matter.matterName}>{matter.matterName}</a>
+                                                <template if:true={matter.hasRole}>
+                                                    <span class="slds-text-color_weak"> &mdash; {matter.role}</span>
+                                                </template>
+                                            </div>
+                                        </template>
+                                    </div>
+                                </template>
+                            </div>
+                        </div>
+                    </div>
+                </template>
+
+                <!-- Display Rich Text details for selected match -->
+                <template if:true={selectedAccountId}>
+                    <div class="slds-box slds-m-top_small slds-theme_shade">
+                        <lightning-formatted-rich-text value={selectedMatchRichText}>
+                        </lightning-formatted-rich-text>
+                    </div>
+                </template>
+
+                <lightning-button
+                    class="slds-m-top_medium"
+                    variant="brand"
+                    label="Link to Event"
+                    onclick={handleSave}
+                    disabled={isLoading}>
+                </lightning-button>
+            </template>
+
+            <!-- State when already linked or no matches found -->
+            <template if:false={accountOptions.length}>
+                <div class="slds-text-color_weak">
+                    <template if:true={isSaveSuccessful}>
+                        <span>Save successful. Please refresh the page to see the updated related record on the Event.</span>
+                    </template>
+                    <template if:false={isSaveSuccessful}>
+                        <span>This event is already linked to a Related Record, or no potential account matches were found.</span>
+                    </template>
+                </div>
+            </template>
+        </div>
+    </lightning-card>
+</template>

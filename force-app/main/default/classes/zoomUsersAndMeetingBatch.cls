@@ -1,13 +1,23 @@
 public with sharing class zoomUsersAndMeetingBatch implements Database.Batchable<SObject>, Database.AllowsCallouts{
     private String token;
     private String queueId;
+    // Backfill mode (see ZoomMeetingTranscriptService.backfill): replayDate is the local day being
+    // re-imported and replayThroughDate the last day to replay. Both are null on the scheduled run.
+    private Date replayDate;
+    private Date replayThroughDate;
     public map<String, User> zoomUserIdsToUserMap;
     public Map<String,List<ZoomMeetingTranscriptService.RecordingFile>> userToTranscriptFileMap;
-    
+
     public zoomUsersAndMeetingBatch(String token, string queueId) {
             this.token = token;
             this.queueId = queueId;
             this.userToTranscriptFileMap = userToTranscriptFileMap;
+    }
+
+    public zoomUsersAndMeetingBatch(String token, String queueId, Date replayDate, Date replayThroughDate) {
+        this(token, queueId);
+        this.replayDate = replayDate;
+        this.replayThroughDate = replayThroughDate;
     }
 
     public Database.QueryLocator start(Database.BatchableContext bc) {
@@ -41,69 +51,36 @@ public with sharing class zoomUsersAndMeetingBatch implements Database.Batchable
         }
         System.debug('zoomUserIdsToUserMap: '+zoomUserIdsToUserMap);
         
-        zoomIdToUserMap = getUserEvents(userIds);
+        zoomIdToUserMap = getUserEvents(userIds, replayDate != null ? replayDate : Date.today());
         System.debug('zoomIdToUserMap: '+zoomIdToUserMap);
         // Get all the Zoom Users associated with the SF Users)
 
         // Fetch Recent Zoom Meetings
-        // Map<String,List<ZoomMeetingTranscriptService.RecordingFile>> 
-        userToTranscriptFileMap = ZoomMeetingTranscriptService.getRecentMeetings(token, zoomUserIdsToUserMap);
+        // Map<String,List<ZoomMeetingTranscriptService.RecordingFile>>
+        userToTranscriptFileMap = replayDate == null
+            ? ZoomMeetingTranscriptService.getRecentMeetings(token, zoomUserIdsToUserMap)
+            : ZoomMeetingTranscriptService.getMeetingsForDate(token, zoomUserIdsToUserMap, replayDate);
         System.debug('userToTranscriptFileMap: '+userToTranscriptFileMap);
 
-
-        List<Meeting_Transcript__c> meetingTranscriptsToInsert = new List<Meeting_Transcript__c>();
-
-        set<String> meetingIds = new set<String>();
+        // Each recording file's transcript is fetched and inserted in its own chained Queueable
+        // transaction (see ZoomTranscriptFetchQueueable) instead of looping through them here.
+        // Salesforce enforces a 120s *cumulative* callout timeout per transaction, so processing
+        // several large transcripts back-to-back in one execute() could still time out even with
+        // each individual callout's timeout maxed out - isolating each file into its own
+        // transaction gives it a fresh callout/heap budget.
+        List<ZoomTranscriptFetchQueueable.TranscriptJob> jobs = new List<ZoomTranscriptFetchQueueable.TranscriptJob>();
 
         for(string key: userToTranscriptFileMap.keySet()){
             List<String> parts = key.split('#');
             String zoomId = parts.size() > 0 ? parts[0] : '';
             String zoomMeetingId = parts.size() > 1 ? parts[1] : '';
-            system.debug('zoomMeetingId IN BATCH: '+zoomMeetingId);
-            for(ZoomMeetingTranscriptService.RecordingFile url: userToTranscriptFileMap.get(key)){
-                meetingIds.add(url.meeting_id);
-                system.debug('ZOOM MEETING ID: '+ url.id);
-                // Get Transcripts from Zoom
-                string transcript = ZoomMeetingTranscriptService.fetchTranscriptFromZoom(url.download_url, token);
-                List<Meeting_Transcript__c> transcriptsToAdd =  ZoomMeetingTranscriptService.processTranscript(transcript, url.meeting_id, zoomUserIdsToUserMap.get(zoomId).Id);
-                for(Meeting_Transcript__c meetingTranscript : transcriptsToAdd){
-                    // system.debug('meetingTranscript: '+ meetingTranscript);
-                    meetingTranscript.OwnerId = queueId;
-                    // system.debug('zoomIdToUserMap.containsKey(zoomMeetingId): '+ zoomIdToUserMap.containsKey(zoomMeetingId) + 'with Zoom MeetingId: '+ zoomMeetingId);
-                    // system.debug('zoomIdToUserMap.get(zoomMeetingId).WhoId: '+ zoomIdToUserMap.get(zoomMeetingId).WhoId);
-                    // system.debug('zoomIdToUserMap.get(zoomMeetingId).AccountId: '+ zoomIdToUserMap.get(zoomMeetingId).AccountId);
-                    if (zoomIdToUserMap.containsKey(zoomMeetingId) && (zoomIdToUserMap.get(zoomMeetingId).WhoId != null && String.ValueOf(zoomIdToUserMap.get(zoomMeetingId).WhoId).startsWith('00Q'))){
-                            meetingTranscript.Lead__c = zoomIdToUserMap.get(zoomMeetingId).WhoId;
-                            meetingTranscript.OwnerId = zoomIdToUserMap.get(zoomMeetingId).OwnerId;
-                        }
-                    else if(zoomIdToUserMap.containsKey(zoomMeetingId) && zoomIdToUserMap.get(zoomMeetingId).WhoId != null){
-                        system.debug('zoomIdToUserMap.get(zoomMeetingId).WhatId!!!!!!!!!: '+ zoomIdToUserMap.get(zoomMeetingId).WhoId);            
-                        if(String.ValueOf(zoomIdToUserMap.get(zoomMeetingId).WhoId).startsWith('003')){
-                            system.debug('IN Contact WhoId: '+ zoomIdToUserMap.get(zoomMeetingId).WhoId);
-                            meetingTranscript.Contact__c = zoomIdToUserMap.get(zoomMeetingId).WhoId;
-                        }
-                        // if(String.ValueOf(zoomIdToUserMap.get(zoomMeetingId).WhatId).startsWith('001')){
-                        //     system.debug('IN Account WhatId: '+ zoomIdToUserMap.get(zoomMeetingId).WhatId);
-                        //     meetingTranscript.Account__c = zoomIdToUserMap.get(zoomMeetingId).WhatId;
-                        // }
-                        meetingTranscript.OwnerId = zoomIdToUserMap.get(zoomMeetingId).OwnerId;
-                    }
-                    else if(zoomIdToUserMap.containsKey(zoomMeetingId) && zoomIdToUserMap.get(zoomMeetingId).WhatId != null){
-                        if(String.ValueOf(zoomIdToUserMap.get(zoomMeetingId).WhatId).startsWith('001')){
-                            system.debug('IN Account WhatId: '+ zoomIdToUserMap.get(zoomMeetingId).WhatId);
-                            meetingTranscript.Account__c = zoomIdToUserMap.get(zoomMeetingId).WhatId;
-                        }
-                        meetingTranscript.OwnerId = zoomIdToUserMap.get(zoomMeetingId).OwnerId;
-                    }
-                    meetingTranscript.Zoom_Event_Id__c = zoomMeetingId;
-                    meetingTranscriptsToInsert.add(meetingTranscript);
-                }
+            for(ZoomMeetingTranscriptService.RecordingFile file: userToTranscriptFileMap.get(key)){
+                jobs.add(new ZoomTranscriptFetchQueueable.TranscriptJob(zoomId, zoomMeetingId, file));
             }
         }
 
-        set<Id> newTranscriptIds = new set<Id>();
-        if(!meetingTranscriptsToInsert.isEmpty()){
-            List<Database.SaveResult> newMeetingTranscripts = Database.insert(meetingTranscriptsToInsert);
+        if(!jobs.isEmpty()){
+            System.enqueueJob(new ZoomTranscriptFetchQueueable(token, queueId, zoomUserIdsToUserMap, zoomIdToUserMap, jobs, replayDate));
         }
     }
     public void finish(Database.BatchableContext bc) {
@@ -111,11 +88,22 @@ public with sharing class zoomUsersAndMeetingBatch implements Database.Batchable
         System.debug('FINISH userToTranscriptFileMap: '+userToTranscriptFileMap);
         System.debug('FINISH token: '+token);
         // Database.executeBatch(new ProcessZoomTranscriptsBatch(token, userToTranscriptFileMap), 1);
+
+        // Backfill: replay the next day with a fresh token - Zoom tokens expire after an hour, so a
+        // multi-day replay can't share the one it started with.
+        if (replayDate != null && replayDate < replayThroughDate) {
+            Database.executeBatch(new zoomUsersAndMeetingBatch(
+                ZoomMeetingTranscriptService.getConfiguredZoomToken(), queueId, replayDate.addDays(1), replayThroughDate), 1);
+        }
     }
 
      public static Map<string, Event> getUserEvents(Set<String> userIds) {
+        return getUserEvents(userIds, Date.today());
+     }
+
+     public static Map<string, Event> getUserEvents(Set<String> userIds, Date onDate) {
         system.debug('IN getUserEvents - ' +userIds);
-        List<Event> events = [SELECT Id, OwnerId, Owner.Name, CreatedDate, WhoId, Who.name, WhatId, What.name, Description, Subject, AccountId FROM Event WHERE OwnerId IN: userIds AND EndDate = TODAY];
+        List<Event> events = [SELECT Id, OwnerId, Owner.Name, CreatedDate, WhoId, Who.name, WhatId, What.name, Description, Subject, AccountId FROM Event WHERE OwnerId IN: userIds AND EndDate = :onDate];
         Map<string, Event> zoomIdToUserMap = new Map<string, Event>();
         if(events.size() > 0){
             for(Event a: events){

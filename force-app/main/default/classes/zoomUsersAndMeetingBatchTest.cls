@@ -7,7 +7,10 @@ private class zoomUsersAndMeetingBatchTest {
             HttpResponse res = new HttpResponse();
             String endpoint = req.getEndpoint();
 
-            if (endpoint.contains('/recordings')) {
+            if (endpoint.contains('/oauth/token')) {
+                res.setStatusCode(200);
+                res.setBody('{"access_token": "mockAccessToken"}');
+            } else if (endpoint.contains('/recordings')) {
                 res.setStatusCode(200);
 
                 ZoomMeetingTranscriptService.RecordingFile rf = new ZoomMeetingTranscriptService.RecordingFile();
@@ -29,8 +32,9 @@ private class zoomUsersAndMeetingBatchTest {
                 res.setStatusCode(200);
                 res.setBody('WEBVTT\n\n00:00:00.000 --> 00:00:02.000\nHello from batch test');
             } else if (endpoint.contains('/download/transcript')) {
+                // Zoom's meeting download host sends the redirect header capitalized (since ~10/9/2026)
                 res.setStatusCode(302);
-                res.setHeader('location', 'https://zoom.test/redirected');
+                res.setHeader('Location', 'https://zoom.test/redirected');
             } else {
                 res.setStatusCode(200);
                 res.setBody('{}');
@@ -209,6 +213,166 @@ private class zoomUsersAndMeetingBatchTest {
 
         System.assert(result.containsKey('11122223333'), 'Expected the parsed Meeting ID to be present as a map key');
         System.assertEquals(matchingEvent.Id, result.get('11122223333').Id);
+    }
+
+    // Mock that simulates a Zoom callout timeout for one specific Zoom user while succeeding
+    // for everyone else, so we can verify a failure is logged without blocking other users.
+    class MockZoomBatchWithTimeoutForOneUser implements HttpCalloutMock {
+        String failingZoomUserId;
+        MockZoomBatchWithTimeoutForOneUser(String failingZoomUserId) {
+            this.failingZoomUserId = failingZoomUserId;
+        }
+        public HTTPResponse respond(HTTPRequest req) {
+            String endpoint = req.getEndpoint();
+            if (endpoint.contains(failingZoomUserId + '/recordings')) {
+                throw new CalloutException('Read timed out');
+            }
+            return new MockZoomBatchHttpResponseGenerator().respond(req);
+        }
+    }
+
+    @isTest
+    static void testExecuteLogsErrorAndContinuesOnCalloutFailure() {
+        User failingUser = createZoomUser('7');
+        User succeedingUser = createZoomUser('8');
+
+        Test.setMock(HttpCalloutMock.class, new MockZoomBatchWithTimeoutForOneUser(failingUser.Zoom_User_Id__c));
+
+        zoomUsersAndMeetingBatch batchJob = new zoomUsersAndMeetingBatch('mockToken', UserInfo.getUserId());
+
+        Test.startTest();
+        batchJob.execute(null, new List<SObject>{ failingUser, succeedingUser });
+        Test.stopTest();
+
+        List<Zoom_Integration_Error__c> errors = [SELECT Error_Type__c, Zoom_User_Id__c, Zoom_Meeting_Id__c, Apex_Class__c, Apex_Method__c, Error_Message__c FROM Zoom_Integration_Error__c];
+        String debugInfo = '';
+        for (Zoom_Integration_Error__c err : errors) {
+            debugInfo += '[' + err.Apex_Class__c + '.' + err.Apex_Method__c + ' type=' + err.Error_Type__c
+                + ' user=' + err.Zoom_User_Id__c + ' meeting=' + err.Zoom_Meeting_Id__c + ' msg=' + err.Error_Message__c + '] ';
+        }
+        System.assertEquals(1, errors.size(), 'Expected one logged error for the failing Zoom user. Got: ' + debugInfo);
+        System.assertEquals('Callout Timeout', errors[0].Error_Type__c);
+        System.assertEquals(failingUser.Zoom_User_Id__c, errors[0].Zoom_User_Id__c);
+        System.assertEquals('getRecentMeetings', errors[0].Apex_Method__c);
+
+        List<Meeting_Transcript__c> transcripts = [SELECT Id, OwnerId FROM Meeting_Transcript__c];
+        System.assertEquals(1, transcripts.size(), 'The succeeding user\'s transcript should still be created');
+    }
+
+    // Returns a meeting from the day before replayDate followed by one that started on replayDate,
+    // so a replay of replayDate should skip the first and import only the second.
+    class MockZoomReplayHttpResponseGenerator implements HttpCalloutMock {
+        Date replayDate;
+        MockZoomReplayHttpResponseGenerator(Date replayDate) {
+            this.replayDate = replayDate;
+        }
+        public HTTPResponse respond(HTTPRequest req) {
+            if (!req.getEndpoint().contains('/recordings')) {
+                return new MockZoomBatchHttpResponseGenerator().respond(req);
+            }
+            ZoomMeetingTranscriptService.RecordingWrapper wrapper = new ZoomMeetingTranscriptService.RecordingWrapper();
+            wrapper.meetings = new List<ZoomMeetingTranscriptService.Meeting>{
+                meetingOn(replayDate.addDays(-1), 22222222222L, 'day-before-uuid'),
+                meetingOn(replayDate, 12345678901L, 'replay-day-uuid')
+            };
+            HttpResponse res = new HttpResponse();
+            res.setStatusCode(200);
+            res.setBody(JSON.serialize(wrapper));
+            return res;
+        }
+        ZoomMeetingTranscriptService.Meeting meetingOn(Date d, Long meetingId, String fileMeetingId) {
+            ZoomMeetingTranscriptService.RecordingFile rf = new ZoomMeetingTranscriptService.RecordingFile();
+            rf.file_type = 'TRANSCRIPT';
+            rf.download_url = 'https://zoom.test/download/transcript';
+            rf.meeting_id = fileMeetingId;
+            rf.id = 'file-' + fileMeetingId;
+
+            ZoomMeetingTranscriptService.Meeting meeting = new ZoomMeetingTranscriptService.Meeting();
+            meeting.id = meetingId;
+            meeting.start_time = Datetime.newInstance(d, Time.newInstance(10, 0, 0, 0)).formatGMT('yyyy-MM-dd\'T\'HH:mm:ss\'Z\'');
+            meeting.recording_files = new List<ZoomMeetingTranscriptService.RecordingFile>{ rf };
+            return meeting;
+        }
+    }
+
+    @isTest
+    static void testGetMeetingsForDateKeepsOnlyThatDaysMeetings() {
+        User testUser = createZoomUser('10');
+        Date replayDate = Date.today().addDays(-3);
+
+        Test.setMock(HttpCalloutMock.class, new MockZoomReplayHttpResponseGenerator(replayDate));
+
+        Test.startTest();
+        Map<String, List<ZoomMeetingTranscriptService.RecordingFile>> result = ZoomMeetingTranscriptService.getMeetingsForDate(
+            'mockToken', new Map<String, User>{ testUser.Zoom_User_Id__c => testUser }, replayDate);
+        Test.stopTest();
+
+        System.assertEquals(1, result.size(), 'Only the meeting that started on the replayed day should be returned. Got: ' + result.keySet());
+        System.assert(result.containsKey(testUser.Zoom_User_Id__c + '#12345678901'));
+    }
+
+    @isTest
+    static void testReplayLinksThatDaysEventAndStampsMeetingDate() {
+        User testUser = createZoomUser('9');
+        Date replayDate = Date.today().addDays(-3);
+
+        Account testAccount = new Account(Name = 'ReplayAccount');
+        insert testAccount;
+
+        Contact testContact = new Contact(LastName = 'ReplayContact', AccountId = testAccount.Id);
+        insert testContact;
+
+        // An Event on the replayed day - a normal run only looks at today's Events and would miss it.
+        Event e = new Event(
+            OwnerId = testUser.Id,
+            Subject = 'Zoom Meeting',
+            StartDateTime = Datetime.newInstance(replayDate, Time.newInstance(10, 0, 0, 0)),
+            EndDateTime = Datetime.newInstance(replayDate, Time.newInstance(11, 0, 0, 0)),
+            Description = 'Meeting ID: 123 4567 8901',
+            WhoId = testContact.Id
+        );
+        insert e;
+
+        Test.setMock(HttpCalloutMock.class, new MockZoomReplayHttpResponseGenerator(replayDate));
+
+        zoomUsersAndMeetingBatch batchJob = new zoomUsersAndMeetingBatch('mockToken', UserInfo.getUserId(), replayDate, replayDate);
+
+        Test.startTest();
+        batchJob.execute(null, new List<SObject>{ testUser });
+        Test.stopTest();
+
+        List<Meeting_Transcript__c> transcripts = [SELECT Id, Zoom_Meeting_Id__c, Meeting_Date__c, Contact__c, OwnerId FROM Meeting_Transcript__c];
+        System.assertEquals(1, transcripts.size(), 'Expected one transcript for the replayed day');
+        System.assertEquals('replay-day-uuid', transcripts[0].Zoom_Meeting_Id__c, 'The previous day\'s meeting should have been filtered out');
+        System.assertEquals(replayDate, transcripts[0].Meeting_Date__c, 'Meeting_Date__c should be the replayed day, not today');
+        System.assertEquals(testContact.Id, transcripts[0].Contact__c, 'Contact should be linked from the replayed day\'s Event');
+        System.assertEquals(testUser.Id, transcripts[0].OwnerId, 'Owner should come from the matched Event owner');
+    }
+
+    @isTest
+    static void testReplayFinishChainsNextDay() {
+        Date replayDate = Date.today().addDays(-2);
+        Test.setMock(HttpCalloutMock.class, new MockZoomBatchHttpResponseGenerator());
+
+        Test.startTest();
+        new zoomUsersAndMeetingBatch('mockToken', UserInfo.getUserId(), replayDate, replayDate.addDays(1)).finish(null);
+        Test.stopTest();
+
+        Integer chained = [SELECT COUNT() FROM AsyncApexJob WHERE ApexClass.Name = 'zoomUsersAndMeetingBatch' AND JobType = 'BatchApex'];
+        System.assertEquals(1, chained, 'finish() should start the next day of the replay');
+    }
+
+    @isTest
+    static void testReplayFinishStopsAfterLastDay() {
+        Date replayDate = Date.today().addDays(-2);
+        Test.setMock(HttpCalloutMock.class, new MockZoomBatchHttpResponseGenerator());
+
+        Test.startTest();
+        new zoomUsersAndMeetingBatch('mockToken', UserInfo.getUserId(), replayDate, replayDate).finish(null);
+        Test.stopTest();
+
+        Integer chained = [SELECT COUNT() FROM AsyncApexJob WHERE ApexClass.Name = 'zoomUsersAndMeetingBatch' AND JobType = 'BatchApex'];
+        System.assertEquals(0, chained, 'finish() should not chain past replayThroughDate');
     }
 
     @isTest

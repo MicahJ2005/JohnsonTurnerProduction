@@ -44,12 +44,16 @@ private class ZoomMeetingTranscriptServiceTest {
 
     @isTest
     static void testExecute() {
-        // Set up test data
+        // Set up test data - username/alias include a timestamp so this doesn't collide with a
+        // hardcoded value already used elsewhere (Salesforce usernames must be globally unique
+        // across every org, not just this one - a hardcoded username here would fail in any org
+        // where that exact string was already taken, e.g. production).
+        String ts = String.valueOf(Datetime.now().getTime());
         User u = new User(
-            Username = 'testuser911@example.com',
+            Username = 'testuser911' + ts + '@example.com',
             Email = 'testuser911@example.com',
             LastName = 'Test911',
-            Alias = 'tuser911',
+            Alias = 'tu9' + ts.substring(ts.length() - 5),
             TimeZoneSidKey = 'America/Los_Angeles',
             LocaleSidKey = 'en_US',
             EmailEncodingKey = 'UTF-8',
@@ -74,6 +78,107 @@ private class ZoomMeetingTranscriptServiceTest {
         // System.assert(!transcripts.isEmpty(), 'Transcripts should have been created');
         // System.assertEquals('1234', transcripts[0].Zoom_Meeting_Id__c);
         // System.assert(transcripts[0].Transcript__c.contains('Hello everyone'));
+    }
+
+    @isTest
+    static void testGetRecentMeetingsSkipsAlreadyImportedTranscript() {
+        // The dedupe check used to compare against meeting.uuid, but Zoom_Meeting_Id__c is always
+        // populated from the recording file's own meeting_id (see ZoomTranscriptFetchQueueable),
+        // so it could never actually match and the same transcript would be re-fetched on every
+        // overlapping run. This proves a transcript already imported for a given meeting_id is
+        // now correctly skipped.
+        String ts912 = String.valueOf(Datetime.now().getTime());
+        User u = new User(
+            Username = 'testuser912' + ts912 + '@example.com',
+            Email = 'testuser912@example.com',
+            LastName = 'Test912',
+            Alias = 'tu9' + ts912.substring(ts912.length() - 5),
+            TimeZoneSidKey = 'America/Los_Angeles',
+            LocaleSidKey = 'en_US',
+            EmailEncodingKey = 'UTF-8',
+            ProfileId = UserInfo.getProfileId(),
+            LanguageLocaleKey = 'en_US',
+            Zoom_User_Id__c = 'zoom1235912'
+        );
+        insert u;
+
+        insert new Meeting_Transcript__c(
+            Johnson_Turner_User__c = u.Id,
+            Zoom_Meeting_Id__c = '1234' // matches MockZoomHttpResponseGenerator's RecordingFile.meeting_id
+        );
+
+        Test.setMock(HttpCalloutMock.class, new MockZoomHttpResponseGenerator());
+
+        Map<String, User> zoomUserIdsToUserMap = new Map<String, User>{ 'zoom1235912' => u };
+
+        Test.startTest();
+        Map<String, List<ZoomMeetingTranscriptService.RecordingFile>> result =
+            ZoomMeetingTranscriptService.getRecentMeetings('mockToken', zoomUserIdsToUserMap);
+        Test.stopTest();
+
+        System.assertEquals(0, result.size(), 'A transcript already imported for this meeting_id should be skipped, not re-fetched');
+    }
+
+    // Transcript download that redirects with a configurable header name (null = no header).
+    class MockTranscriptRedirect implements HttpCalloutMock {
+        String headerName;
+        MockTranscriptRedirect(String headerName) {
+            this.headerName = headerName;
+        }
+        public HTTPResponse respond(HTTPRequest req) {
+            HttpResponse res = new HttpResponse();
+            if (req.getEndpoint().contains('redirected')) {
+                res.setStatusCode(200);
+                res.setBody('WEBVTT\n\n00:00:00.000 --> 00:00:02.000\nHello everyone');
+            } else {
+                res.setStatusCode(302);
+                if (headerName != null) {
+                    res.setHeader(headerName, 'https://zoom.test/redirected');
+                }
+            }
+            return res;
+        }
+    }
+
+    @isTest
+    static void testFetchTranscriptFollowsCapitalizedLocationHeader() {
+        // Zoom's meeting download host started sending "Location" instead of "location" around
+        // 10/9/2026; the case-sensitive getHeader('location') lookup returned null for every download.
+        Test.setMock(HttpCalloutMock.class, new MockTranscriptRedirect('Location'));
+
+        Test.startTest();
+        String transcript = ZoomMeetingTranscriptService.fetchTranscriptFromZoom('https://zoom.test/download/transcript', 'mockToken');
+        Test.stopTest();
+
+        System.assert(transcript.contains('Hello everyone'), 'The redirect should be followed when the header is "Location"');
+    }
+
+    @isTest
+    static void testFetchTranscriptThrowsClearErrorWhenRedirectHasNoLocation() {
+        Test.setMock(HttpCalloutMock.class, new MockTranscriptRedirect(null));
+
+        String message;
+        Test.startTest();
+        try {
+            ZoomMeetingTranscriptService.fetchTranscriptFromZoom('https://zoom.test/download/transcript', 'mockToken');
+        } catch (CalloutException e) {
+            message = e.getMessage();
+        }
+        Test.stopTest();
+
+        System.assert(message != null && message.contains('no Location header'), 'Expected a descriptive error, got: ' + message);
+    }
+
+    @isTest
+    static void testBackfillStartsReplayBatch() {
+        Test.setMock(HttpCalloutMock.class, new MockZoomHttpResponseGenerator());
+        Date replayDay = Date.today().addDays(-2);
+
+        Test.startTest();
+        Id jobId = ZoomMeetingTranscriptService.backfill(replayDay, replayDay);
+        Test.stopTest();
+
+        System.assertNotEquals(null, jobId, 'backfill() should start a zoomUsersAndMeetingBatch run');
     }
 
      // Mock callout class
@@ -104,11 +209,12 @@ private class ZoomMeetingTranscriptServiceTest {
         Account acc = new Account(LastName = 'ZoomAcct', PersonEmail = 'participant@example.com', RecordTypeId = Schema.SObjectType.Account.getRecordTypeInfosByName().get('Person Account').getRecordTypeId());
         insert acc;
 
+        String ts3333 = String.valueOf(Datetime.now().getTime());
         User user = new User(
-            Username = 'user3333xxxxx@example.com',
+            Username = 'user3333xxxxx' + ts3333 + '@example.com',
             Email = 'participantx@example.com',
             LastName = 'ZoomUx',
-            Alias = 'zo333x',
+            Alias = 'zo' + ts3333.substring(ts3333.length() - 6),
             TimeZoneSidKey = 'America/Los_Angeles',
             LocaleSidKey = 'en_US',
             EmailEncodingKey = 'UTF-8',

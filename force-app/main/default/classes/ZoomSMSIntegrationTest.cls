@@ -31,6 +31,19 @@ private class ZoomSMSIntegrationTest {
     }
 
     @isTest
+    static void testRemovePhoneNumberFormatHandlesAlreadyPrefixedNumbers() {
+        // A 10-digit number gets the country code prepended, same as before.
+        System.assertEquals('16128670420', ZoomSMSIntegration.removePhoneNumberFormat('(612) 867-0420'));
+
+        // A number already stored with the country code baked in (e.g. "1-6128670420", as seen on
+        // a real Account record) used to get a second "1" prepended on top of the correct 11-digit
+        // result, producing a 12-digit key that could never match a real lookup value.
+        System.assertEquals('16128670420', ZoomSMSIntegration.removePhoneNumberFormat('1-6128670420'));
+
+        System.assertEquals(null, ZoomSMSIntegration.removePhoneNumberFormat(null));
+    }
+
+    @isTest
     static void testFormatPhoneNumber() {
         String formatted = ZoomSMSIntegration.formatPhoneNumber(null);
         System.assertEquals(null, formatted); // Already in format
@@ -132,6 +145,26 @@ private class ZoomSMSIntegrationTest {
         System.assertEquals(1, sessions.size(), 'Expected one SMS session to be created');
         System.assertNotEquals(null, sessions[0].SMS_Session_Text__c, 'Session text should be populated');
         //System.assert(individuals.size() > 0, 'Expected at least one SMS session individual');
+    }
+
+    @isTest
+    static void testSMSIntegrationDoesNotDuplicateSessionOnReprocessing() {
+        // The fetch window is a rolling last-24-hours on every run, so the same session_id can
+        // legitimately come back on a later run - this proves it updates the existing
+        // SMS_Session__c/SMS_Session_Individual__c records in place instead of creating a second
+        // copy of each.
+        Test.setMock(HttpCalloutMock.class, new MultiSMSMock());
+
+        Test.startTest();
+        ZoomSMSIntegration.sendZoomDataToSalesforce();
+        ZoomSMSIntegration.sendZoomDataToSalesforce();
+        Test.stopTest();
+
+        List<SMS_Session__c> sessions = [SELECT Id FROM SMS_Session__c WHERE Zoom_Session_Id__c = 'ABC123'];
+        System.assertEquals(1, sessions.size(), 'Reprocessing the same session should not create a duplicate SMS_Session__c');
+
+        List<SMS_Session_Individual__c> individuals = [SELECT Id FROM SMS_Session_Individual__c WHERE Zoom_Session_Id__c = 'ABC123'];
+        System.assertEquals(1, individuals.size(), 'Reprocessing the same session should not create duplicate SMS_Session_Individual__c records');
     }
 
     @isTest
